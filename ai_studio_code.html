@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Gesture Shape App</title>
+  <!-- Load p5.js and MediaPipe libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3"></script>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; }
+    canvas { border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+    #status { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 5px; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+<div id="status">Loading AI Model...</div>
+
+<script type="module">
+  import { GestureRecognizer, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
+  let gestureRecognizer;
+  let webcam;
+  let runningMode = "VIDEO";
+  let results = undefined;
+  let canvas;
+
+  // 1. Initialize the Gesture Recognizer
+  const createGestureRecognizer = async () => {
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+    gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+        delegate: "GPU"
+      },
+      runningMode: runningMode,
+      numHands: 2
+    });
+    document.getElementById('status').innerText = "Camera Active: Show your hand!";
+  };
+  createGestureRecognizer();
+
+  // 2. Setup p5.js for Camera and Drawing
+  window.setup = function() {
+    canvas = createCanvas(640, 480);
+    webcam = createCapture(VIDEO);
+    webcam.size(640, 480);
+    webcam.hide(); // Hide the default HTML video element
+  };
+
+  window.draw = function() {
+    // Draw the camera feed (mirrored for intuitive use)
+    translate(width, 0);
+    scale(-1, 1);
+    image(webcam, 0, 0, width, height);
+
+    if (gestureRecognizer && webcam.elt.readyState >= 2) {
+      let nowInMs = Date.now();
+      results = gestureRecognizer.recognizeForVideo(webcam.elt, nowInMs);
+
+      if (results.gestures.length > 0) {
+        // Loop through each detected hand
+        for (let i = 0; i < results.gestures.length; i++) {
+          const gesture = results.gestures[i][0].categoryName;
+          const landmarks = results.landmarks[i];
+          
+          // Get the coordinates of the palm (landmark 0 is the wrist)
+          const x = landmarks[0].x * width;
+          const y = landmarks[0].y * height;
+
+          drawShape(gesture, x, y);
+        }
+      }
+    }
+  };
+
+  // 3. Logic to draw specific shapes based on gestures
+  function drawShape(gesture, x, y) {
+    noStroke();
+    
+    if (gesture === "Open_Palm") {
+      fill(255, 235, 59, 200); // Yellow
+      circle(x, y, 100);
+    } 
+    else if (gesture === "Closed_Fist") {
+      fill(33, 150, 243, 200); // Blue
+      rectMode(CENTER);
+      rect(x, y, 80, 80);
+    } 
+    else if (gesture === "Victory") {
+      fill(255, 87, 34, 200); // Orange
+      triangle(x, y - 60, x - 50, y + 30, x + 50, y + 30);
+    }
+  }
+</script>
+</body>
+</html>
