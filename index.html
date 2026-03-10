@@ -1,104 +1,129 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>3D Hand Spawner</title>
+    <title>3D Gesture Spawner</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #video-container { position: relative; width: 100vw; height: 100vh; }
-        video { 
-            position: absolute; width: 100%; height: 100%; object-fit: cover; 
-            transform: scaleX(-1); /* Mirror camera */
+        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+        
+        /* The video feed sits at the bottom */
+        #webcam {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror view */
+            z-index: 1; 
         }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* The 3D layer sits on top of the video */
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
         #ui {
-            position: absolute; top: 20px; left: 20px; color: white;
-            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 10px; pointer-events: none;
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 3;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 15px;
+            border-radius: 10px;
+            pointer-events: none;
         }
-        .key { color: #00ffcc; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <div id="video-container">
-        <video id="webcam" autoplay playsinline></video>
-        <div id="ui">
-            <h3>Hand Gesture Spawner</h3>
-            <p><span class="key">Open Palm:</span> Floating Spheres</p>
-            <p><span class="key">Closed Fist:</span> Floating Cubes</p>
-            <p><span class="key">Victory:</span> Spiky Pyramids</p>
-            <p>Shapes will stay where you leave them!</p>
-        </div>
+    <div id="ui">
+        <h3 id="status">Loading AI...</h3>
+        <p>✋ <b>Open Palm:</b> Spheres</p>
+        <p>✊ <b>Closed Fist:</b> Cubes</p>
+        <p>✌️ <b>Victory:</b> Pyramids</p>
     </div>
 
-    <!-- Load Three.js and MediaPipe -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "mediapipe": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3"
-            }
-        }
-    </script>
+    <video id="webcam" autoplay playsinline></video>
 
+    <!-- Load Three.js and MediaPipe via CDNs -->
     <script type="module">
-        import * as THREE from 'three';
-        import { GestureRecognizer, FilesetResolver } from "mediapipe";
+        import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+        import { GestureRecognizer, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        // --- 1. Three.js Setup (The 3D World) ---
+        const video = document.getElementById("webcam");
+        const status = document.getElementById("status");
+        
+        let gestureRecognizer;
+        let lastVideoTime = -1;
+        let lastSpawnTime = 0;
+        const spawnCooldown = 800; // ms between spawns
+
+        // --- 1. Three.js Setup ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        // Alpha: true makes the background transparent so we see the video
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        document.getElementById('video-container').appendChild(renderer.domElement);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
 
-        // Add some light
-        const light = new THREE.AmbientLight(0xffwhite, 1);
+        const light = new THREE.AmbientLight(0xffffff, 1.5);
         scene.add(light);
-        const pointLight = new THREE.PointLight(0xffffff, 50);
+        const pointLight = new THREE.PointLight(0xffffff, 10);
         pointLight.position.set(5, 5, 5);
         scene.add(pointLight);
 
         camera.position.z = 5;
 
-        // --- 2. MediaPipe Hand Tracking Setup ---
-        let gestureRecognizer;
-        const video = document.getElementById("webcam");
-        let lastVideoTime = -1;
-        let lastSpawnTime = 0;
-        const spawnCooldown = 600; // Milliseconds between spawns
-
-        async function initAI() {
-            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-            gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
-                    delegate: "GPU"
-                },
-                runningMode: "VIDEO",
-                numHands: 1
-            });
-            startCamera();
+        // --- 2. Initialize AI & Camera ---
+        async function init() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+                gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 1
+                });
+                
+                status.innerText = "Camera Ready!";
+                startCamera();
+            } catch (err) {
+                status.innerText = "Error: Use a Local Server (https/localhost)";
+                console.error(err);
+            }
         }
 
-        function startCamera() {
-            navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
-                video.srcObject = stream;
-                video.addEventListener("loadeddata", predictWebcam);
+        async function startCamera() {
+            const constraints = { video: { width: 1280, height: 720 } };
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = stream;
+            video.addEventListener("loadeddata", () => {
+                renderLoop();
             });
         }
 
         // --- 3. Spawning Logic ---
         function spawnObject(gesture, x, y) {
-            // Convert screen coordinates to Three.js world coordinates
-            // (x and y are 0 to 1 from MediaPipe)
+            // Map 0-1 coords to Three.js 3D space
+            // MediaPipe X is 0 (left) to 1 (right)
+            // Three.js X is -5 (left) to 5 (right)
             const worldX = (x - 0.5) * 10; 
             const worldY = (0.5 - y) * 8; 
 
             let geometry;
             let material = new THREE.MeshStandardMaterial({ 
-                color: Math.random() * 0xffffff,
-                metalness: 0.7,
-                roughness: 0.2
+                color: new THREE.Color(`hsl(${Math.random() * 360}, 70%, 60%)`),
+                metalness: 0.5,
+                roughness: 0.1
             });
 
             if (gesture === "Open_Palm") {
@@ -107,20 +132,19 @@
                 geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
             } else if (gesture === "Victory") {
                 geometry = new THREE.ConeGeometry(0.4, 0.8, 4);
-            } else {
-                return; // Don't spawn for unknown gestures
-            }
+            } else return;
 
             const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(-worldX, worldY, 0); // Mirroring X to match mirrored video
+            // We flip worldX because the video is mirrored
+            mesh.position.set(-worldX, worldY, 0); 
             scene.add(mesh);
             
-            // Add a little rotation animation data
-            mesh.userData.rotationSpeed = Math.random() * 0.02;
+            mesh.userData.rotSpeed = Math.random() * 0.03 + 0.01;
         }
 
-        // --- 4. Main Loop ---
-        async function predictWebcam() {
+        // --- 4. Main Render Loop ---
+        function renderLoop() {
+            // AI Detection
             if (video.currentTime !== lastVideoTime) {
                 lastVideoTime = video.currentTime;
                 const results = gestureRecognizer.recognizeForVideo(video, Date.now());
@@ -130,33 +154,33 @@
                     const palm = results.landmarks[0][0]; // Wrist landmark
                     
                     const now = Date.now();
-                    if (now - lastSpawnTime > spawnCooldown) {
+                    if (now - lastSpawnTime > spawnCooldown && gesture !== "None") {
                         spawnObject(gesture, palm.x, palm.y);
                         lastSpawnTime = now;
                     }
                 }
             }
 
-            // Animate all spawned objects
+            // Object Animation
             scene.traverse((obj) => {
                 if (obj.isMesh) {
-                    obj.rotation.x += obj.userData.rotationSpeed || 0.01;
-                    obj.rotation.y += obj.userData.rotationSpeed || 0.01;
+                    obj.rotation.x += obj.userData.rotSpeed;
+                    obj.rotation.y += obj.userData.rotSpeed;
                 }
             });
 
             renderer.render(scene, camera);
-            requestAnimationFrame(predictWebcam);
+            requestAnimationFrame(renderLoop);
         }
 
-        // Handle Window Resize
+        // Handle Resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        initAI();
+        init();
     </script>
 </body>
 </html>
